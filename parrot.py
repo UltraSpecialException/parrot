@@ -6,6 +6,9 @@ import torch.optim as optim
 from typing import Optional, Union, Dict, Any, List
 import json
 import warnings
+import os
+from tqdm import tqdm
+from traceback import print_exc
 
 
 class ParrotConfig:
@@ -342,8 +345,75 @@ class Parrot:
         """
         self.lr_scheduler.load_state_dict(torch.load(path, map_location="cpu"))
 
-    def train(self, data_loader: DataLoader):
+    def train(self, data_loader: DataLoader, epochs: int=1,
+              checkpoint: bool=True, checkpoint_freq: int=100,
+              checkpoint_dir: str=".", checkpoint_name: str="") -> None:
         """
-        Train the Transformer model using data in the data loader.
+        Train the Transformer model using data in the data loader for
+        <epochs> number of epochs.
+
+        If <checkpoint> is True, every <checkpoint_freq> iteration, the model's
+        weights will be checkpointed. If an error occurs that can be handled by
+        Python, a checkpoint will also be saved.
         """
-        pass
+        # check that the checkpointing directory exists if checkpoint is turned
+        # on to avoid getting an error after training has started
+        if checkpoint and not os.path.isdir(checkpoint_dir):
+            raise FileNotFoundError(f"{checkpoint_dir} isn't a valid directory")
+        elif checkpoint and checkpoint_name is None:
+            checkpoint_name = "parrot_checkpoint"
+
+        if not checkpoint_dir.endswith("/"):
+            checkpoint_dir += "/"
+
+        training_length = epochs * len(data_loader)
+        progress = tqdm(training_length)
+
+        print(f"Training {len(data_loader)} batches for {epochs} number of "
+              f"epochs for a total of {training_length} iterations.")
+        self.model.train()
+
+        criterion = nn.CrossEntropyLoss()
+
+        curr_iter = 1
+        try:
+            for epoch in range(epochs):
+                for inputs, responses in data_loader:
+                    # zero out the gradient to compute new gradients for this
+                    # training iteration
+                    self.optimizer.zero_grad()
+
+                    inputs = inputs.to(self.device)
+                    responses = responses.to(self.device)
+                    decoded_outputs = self.model(inputs, responses)
+                    predictions = self.model.project_to_vocabs(decoded_outputs)
+
+                    loss = criterion(predictions.transpose(1, 2), responses)
+                    loss.backward()    # backprop
+                    # this will also step the optimizer
+                    self.lr_scheduler.step()
+
+                    if checkpoint and not curr_iter % checkpoint_freq:
+                        progress.set_description(
+                            f"Saving checkpoint (iter #{curr_iter})")
+
+                        file_name = f"{checkpoint_name}-{curr_iter}.tar"
+                        file_path = os.path.join(checkpoint_dir, file_name)
+                        torch.save(self.model.state_dict(), file_path)
+
+                    progress.set_description(
+                        "[Loss: {:.4f}]".format(loss.item()))
+                    progress.update(1)
+
+                    del loss
+                    torch.cuda.empty_cache()
+                    curr_iter += 1
+
+        # any exception that can be caught by Python, we save a checkpoint
+        except Exception as error:
+            print(f"Error occurred: {error} at iteration {curr_iter}, "
+                  f"attempting to save checkpoint, then exiting...")
+            file_name = f"{checkpoint_name}-exception.tar"
+            file_path = os.path.join(checkpoint_dir, file_name)
+            torch.save(self.model.state_dict(), file_path)
+            print_exc()
