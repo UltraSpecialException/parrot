@@ -113,10 +113,20 @@ class Tokenizer:
                               "None-valued argument and creating an empty "
                               "Tokenizer.")
 
-            self._num_words = 0
-            self._word_to_idx = LockableDictionary()
-            self._idx_to_word = LockableDictionary()
-            self._all_words = set()
+            self._num_words = 4
+            self._word_to_idx = LockableDictionary({
+                "[PAD]": 0,
+                "[START]": 1,
+                "[END]": 2,
+                "[UNK]": 3
+            })
+            self._idx_to_word = LockableDictionary({
+                0: "[PAD]",
+                1: "[START]",
+                2: "[END]",
+                3: "[UNK]"
+            })
+            self._all_words = {"[PAD]", "[START]", "[END]", "[UNK]"}
             self._word_counts = LockableDictionary()
             self._is_locked = False
         else:
@@ -138,6 +148,10 @@ class Tokenizer:
 
             if is_locked:
                 self.seal_tokenizer()
+
+        self.pad_token = self.word_to_index_mapping["[PAD]"]
+        self.start_token = self.word_to_index_mapping["[START]"]
+        self.end_token = self.word_to_index_mapping["[END]"]
 
     def add_word(self, word: str) -> None:
         """
@@ -235,6 +249,61 @@ class Tokenizer:
         with open(path, "w+") as output_file:
             json.dump(info_to_save, output_file)
 
+    def warn_use_unlocked(self) -> None:
+        """
+        This method is used in the encoding and decoding methods to issue a
+        warning if these methods are called when the tokenizer is unsealed.
+        """
+        if not self.is_locked:
+            warnings.warn("Tokenizing with an unlocked tokenizer, meaning that "
+                          "its content can be changed. If the setting up of "
+                          "the tokenizer is finished, consider locking it for "
+                          "safety (call .seal_tokenizer()).")
+
+    def get_index_of_word(self, word: str) -> int:
+        """
+        Return the index of the word in the tokenizer's vocabulary. If the word
+        does not exist, the index of the special token [UNK] is returned.
+        """
+        if word in self.word_to_index_mapping:
+            return self.word_to_index_mapping[word]
+        else:
+            return self.word_to_index_mapping["[UNK]"]
+
+    def get_word_of_index(self, index: int) -> str:
+        """
+        Return the word associated to the given index in this tokenizer's
+        vocabulary.
+        """
+        try:
+            return self.index_to_word_mapping[index]
+        except KeyError:
+            raise IndexError(f"Indexing into this tokenizer's vocabulary range "
+                             f"between 0 and {len(self.vocabulary) - 1} since "
+                             f"there are {self.num_words} words. Got: {index}")
+
+    def encode(self, sentence: str, split_token=" ") -> List[int]:
+        """
+        Return a list containing the index of each word in <sentence> in this
+        tokenizer's vocabulary.
+
+        <sentence> should be pre-processed such that splitting down
+        <split_token> will generate a list of separate tokens.
+        """
+        self.warn_use_unlocked()
+        words = sentence.split(split_token)
+        return [self.start_token] + \
+               [self.get_index_of_word(word) for word in words] + \
+               [self.end_token]
+
+    def decode(self, sentence: List[int]) -> str:
+        """
+        Return the string representing the words contained in the given encoded
+        sentence. The given <sentence> should be a list of tokens.
+        """
+        words = [self.get_word_of_index(index) for index in sentence]
+        return " ".join(words) + "."
+
     @property
     def num_words(self) -> int:
         """
@@ -282,7 +351,7 @@ class Tokenizer:
         return self._is_locked
 
     @num_words.setter
-    def num_words(self, *args, **kwargs):
+    def num_words(self, *args, **kwargs) -> None:
         """
         num_words should not be set explicitly and should be internally set by
         the tokenizer. Attempting to modify this will raise an error. Note that
@@ -292,7 +361,7 @@ class Tokenizer:
         raise AttributeError("This attribute should not be explicitly set.")
 
     @is_locked.setter
-    def is_locked(self, *args, **kwargs):
+    def is_locked(self, *args, **kwargs) -> None:
         """
         is_locked should not be set explicitly and should be internally set by
         the tokenizer. Attempting to modify this will raise an error. Note that

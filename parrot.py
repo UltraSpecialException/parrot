@@ -165,6 +165,7 @@ class ParrotConfig:
             raise ValueError(f"Given dictionary is missing the following "
                              f"parameters: {missing}")
 
+        copy = param_dict.copy()
         for param in param_dict:
             param_val = param_dict[param]
             if param in cls.__type_check__:
@@ -181,9 +182,12 @@ class ParrotConfig:
             else:
                 warnings.warn(f"Superfluous parameter {param} was given, hence"
                               f"skipped. Consider removing this parameter from"
-                              f"the dictionary for subsequent runs.")
+                              f"the dictionary for subsequent runs. Removing "
+                              f"it from the dictionary.")
+                del copy[param]
 
-        return cls(**param_dict)
+
+        return cls(**copy)
 
 
     def get_config_arguments(self) -> List[Any]:
@@ -356,11 +360,16 @@ class Parrot:
         weights will be checkpointed. If an error occurs that can be handled by
         Python, a checkpoint will also be saved.
         """
-        # check that the checkpointing directory exists if checkpoint is turned
-        # on to avoid getting an error after training has started
-        if checkpoint and not os.path.isdir(checkpoint_dir):
+        # we check all the checkpointing even if checkpoint is False just in
+        # case an error occurs and a checkpoint is attempted to be saved
+
+        # check that the checkpointing directory exists to avoid getting an
+        # error after training has started
+        if not os.path.isdir(checkpoint_dir):
             raise FileNotFoundError(f"{checkpoint_dir} isn't a valid directory")
-        elif checkpoint and checkpoint_name is None:
+
+        # can't be empty, None, etc.
+        if not checkpoint_name:
             checkpoint_name = "parrot_checkpoint"
 
         if not checkpoint_dir.endswith("/"):
@@ -373,7 +382,7 @@ class Parrot:
               f"epochs for a total of {training_length} iterations.")
         self.model.train()
 
-        criterion = nn.CrossEntropyLoss()
+        criterion = nn.CrossEntropyLoss(ignore_index=0)
 
         curr_iter = 1
         try:
