@@ -1,6 +1,8 @@
 from typing import Dict, List, Any, Optional
 import warnings
 import json
+from sacremoses import MosesTokenizer, MosesDetokenizer
+import html
 
 
 class LockableDictionary(dict):
@@ -152,6 +154,8 @@ class Tokenizer:
         self.pad_token = self.word_to_index_mapping["[PAD]"]
         self.start_token = self.word_to_index_mapping["[START]"]
         self.end_token = self.word_to_index_mapping["[END]"]
+        self.encoder = MosesTokenizer("en")
+        self.decoder = MosesDetokenizer("en")
 
     def add_word(self, word: str) -> None:
         """
@@ -169,16 +173,14 @@ class Tokenizer:
             self._word_counts[word] = 1
             self._num_words += 1
 
-    def process_sentence(self, sentence: str, split_token: str=" ") -> None:
+    def process_sentence(self, sentence: str) -> None:
         """
         Break the sentence <sentence> into individual tokens and add each word
         into the vocabulary of the tokenizer.
-
-        <sentence> should be pre-processed such that by splitting down
-        <split_token>, each resulting element of the splitted sentence is its
-        own token.
         """
-        for word in sentence.split(split_token):
+        preprocessed_sentence = self.encoder.tokenize(sentence)
+        for word in preprocessed_sentence:
+            word = html.unescape(word)
             self.add_word(word)
 
     def seal_tokenizer(self) -> None:
@@ -282,16 +284,15 @@ class Tokenizer:
                              f"between 0 and {len(self.vocabulary) - 1} since "
                              f"there are {self.num_words} words. Got: {index}")
 
-    def encode(self, sentence: str, split_token=" ") -> List[int]:
+    def encode(self, sentence: str) -> List[int]:
         """
         Return a list containing the index of each word in <sentence> in this
         tokenizer's vocabulary.
 
-        <sentence> should be pre-processed such that splitting down
-        <split_token> will generate a list of separate tokens.
         """
         self.warn_use_unlocked()
-        words = sentence.split(split_token)
+        words = self.encoder.tokenize(sentence)
+        words = [html.unescape(word) for word in words]
         return [self.start_token] + \
                [self.get_index_of_word(word) for word in words] + \
                [self.end_token]
@@ -302,7 +303,7 @@ class Tokenizer:
         sentence. The given <sentence> should be a list of tokens.
         """
         words = [self.get_word_of_index(index) for index in sentence]
-        return " ".join(words) + "."
+        return self.decoder.detokenize(" ".join(words) + ".")
 
     @property
     def num_words(self) -> int:

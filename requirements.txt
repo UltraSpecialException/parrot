@@ -2,3 +2,4 @@ numpy
 torch
 torch-transformers
 tqdm
+sacremoses
