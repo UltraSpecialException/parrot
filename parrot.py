@@ -271,6 +271,7 @@ class Parrot:
                  weight_decay: Optional[float]=None,
                  warmup_steps: Optional[int]=None,
                  device: torch.device=torch.device("cpu"),
+                 parallel: bool=False,
                  **kwargs):
         """
         Initializes a Parrot chatbot.
@@ -306,8 +307,13 @@ class Parrot:
                                   weight_decay, warmup_steps, **kwargs)
 
         self.config = config
+        self.device = device
 
         self.model = Transformer(*self.config.get_config_arguments(), device)
+        self.model = self.model.to(self.device)
+
+        if self.device == torch.device("cuda") and parallel:
+            self.model = nn.DataParallel(self.model)
 
         model_params = list(self.model.named_parameters())
         non_decay = []
@@ -329,8 +335,6 @@ class Parrot:
             d_model=config.d_model,
             optimizer=self.optimizer
         )
-
-        self.device = device
 
     def load_model_from_checkpoint(self, path: str) -> None:
         """

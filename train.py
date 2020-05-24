@@ -4,6 +4,7 @@ import argparse
 import json
 import numpy as np
 import torch
+import torch.nn as nn
 
 
 if __name__ == "__main__":
@@ -140,8 +141,14 @@ if __name__ == "__main__":
             "optimizer": args.optimizer,
         }
 
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+    else:
+        device = torch.device("cpu")
+
     model_config = ParrotConfig.from_dict(configs)
-    model = Parrot(config=model_config)
+    model = Parrot(config=model_config, device=device, parallel=args.parallel)
+
 
     if args.export_configurations is not None:
         model_config.to_dict(to_json=True, out_path=args.export_configurations)
@@ -165,5 +172,5 @@ if __name__ == "__main__":
         else args.checkpoint_dir + "/"
 
     save_path = f"{dir_path}{args.checkpoint_name}_final.tar"
-    
+
     torch.save(model.get_stored_weights(), save_path)
