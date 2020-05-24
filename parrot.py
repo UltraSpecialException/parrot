@@ -4,6 +4,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 import torch.optim as optim
 from typing import Optional, Union, Dict, Any, List
+from collections import OrderedDict
 import json
 import warnings
 import os
@@ -210,11 +211,11 @@ class ParrotConfig:
             self.set_seq_len,
         ]
 
-    def to_dict(self, to_json: bool=False, out_dir: Optional[str]=None) \
+    def to_dict(self, to_json: bool=False, out_path: Optional[str]=None) \
             -> Dict[str, Union[int, float, bool, str]]:
         """
         Export the current configurations into a dictionary and return it. If
-        <to_json> is True, <out_dir> is required to be a valid path so that
+        <to_json> is True, <out_path> is required to be a valid path so that
         the dictionary of config can be exported into the file system.
         """
         config = {}
@@ -222,11 +223,11 @@ class ParrotConfig:
             config[param] = self.__dict__[param]
 
         if to_json:
-            assert out_dir is not None, \
+            assert out_path is not None, \
                 "To save the configurations into a JSON, the parameter " \
                 "out_dir needs to not be None."
 
-            with open(out_dir) as config_file:
+            with open(out_path) as config_file:
                 json.dump(config, config_file)
 
         return config
@@ -349,8 +350,24 @@ class Parrot:
         """
         self.lr_scheduler.load_state_dict(torch.load(path, map_location="cpu"))
 
-    def train(self, data_loader: DataLoader, epochs: int=1,
-              checkpoint: bool=True, checkpoint_freq: int=100,
+    def compute_batch_loss(self, inputs: torch.Tensor,
+                               responses: torch.Tensor,
+                               criterion: nn.CrossEntropyLoss) -> torch.Tensor:
+        """
+        Run the given inputs and responses through the model and compute the
+        associated loss.
+        """
+        inputs = inputs.to(self.device)
+        responses = responses.to(self.device)
+        decoded_outputs = self.model(inputs, responses)
+        predictions = self.model.project_to_vocabs(decoded_outputs)
+
+        loss = criterion(predictions.transpose(1, 2), responses)
+
+        return loss
+
+    def train(self, train_dataloader: DataLoader, val_dataloader: DataLoader,
+              epochs: int=1, checkpoint: bool=True, checkpoint_freq: int=100,
               checkpoint_dir: str=".", checkpoint_name: str="") -> None:
         """
         Train the Transformer model using data in the data loader for
@@ -375,29 +392,25 @@ class Parrot:
         if not checkpoint_dir.endswith("/"):
             checkpoint_dir += "/"
 
-        training_length = epochs * len(data_loader)
-        progress = tqdm(training_length)
+        training_length = epochs * len(train_dataloader)
 
-        print(f"Training {len(data_loader)} batches for {epochs} number of "
+        print(f"Training {len(train_dataloader)} batches for {epochs} number of "
               f"epochs for a total of {training_length} iterations.")
-        self.model.train()
 
         criterion = nn.CrossEntropyLoss(ignore_index=0)
 
         curr_iter = 1
         try:
             for epoch in range(epochs):
-                for inputs, responses in data_loader:
+                self.model.train()
+                print(f"Training epoch #{epoch + 1}")
+                progress = tqdm(len(train_dataloader))
+                for inputs, responses in train_dataloader:
                     # zero out the gradient to compute new gradients for this
                     # training iteration
                     self.optimizer.zero_grad()
 
-                    inputs = inputs.to(self.device)
-                    responses = responses.to(self.device)
-                    decoded_outputs = self.model(inputs, responses)
-                    predictions = self.model.project_to_vocabs(decoded_outputs)
-
-                    loss = criterion(predictions.transpose(1, 2), responses)
+                    loss = self.compute_batch_loss(inputs, responses, criterion)
                     loss.backward()    # backprop
                     # this will also step the optimizer
                     self.lr_scheduler.step()
@@ -417,6 +430,8 @@ class Parrot:
                     del loss
                     torch.cuda.empty_cache()
                     curr_iter += 1
+                progress.close()
+                self.validate(val_dataloader, criterion)
 
         # any exception that can be caught by Python, we save a checkpoint
         except Exception as error:
@@ -426,3 +441,26 @@ class Parrot:
             file_path = os.path.join(checkpoint_dir, file_name)
             torch.save(self.model.state_dict(), file_path)
             print_exc()
+
+    def validate(self, dataloader: DataLoader,
+                 criterion: nn.CrossEntropyLoss) -> None:
+        """
+        Validate using the hold out data loaded into <data_loader> and report
+        the loss by average across the losses of each batch.
+        """
+        print("Validating")
+        self.model.eval()
+
+        with torch.no_grad():
+            total_loss = 0
+            for inputs, responses in dataloader:
+                loss = self.compute_batch_loss(inputs, responses, criterion)
+                total_loss += loss
+
+        print("Average validation loss:", total_loss / len(dataloader))
+
+    def get_stored_weights(self) -> OrderedDict[str, torch.Tensor]:
+        """
+        Return the weights of the current model.
+        """
+        return self.model.state_dict()

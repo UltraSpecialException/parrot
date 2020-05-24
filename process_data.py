@@ -1,5 +1,5 @@
 from . import Tokenizer
-from typing import List, Tuple
+from typing import List, Tuple, Union
 import os
 import json
 import torch
@@ -33,31 +33,41 @@ def tokenize_data(data: List[str], tokenizer: Tokenizer) -> List[List[int]]:
     return tokenized_data
 
 
-def pad_data(data: List[List[int]], batch_size: int, tokenizer: Tokenizer) \
-        -> List[List[int]]:
+def pad_data(data: List[List[int]], batch_size: int, tokenizer: Tokenizer,
+             return_longest_seq_len=True) -> Union[List[List[int]],
+                                                   Tuple[List[List[int]], int]]:
     """
     Pad the data by dividing the entire dataset into batches of size
     <batch_size> and then for each batch, post-pad the data with the tokenizer's
     padding token. For each sentence in a batch, the difference in length
     between this sentence and the longest sentence in the batch will be padded.
     """
+    longest_seq_len = 0
     padded_data = []
     for i in range(start=0, stop=len(data), step=batch_size):
         batch = data[i: i + batch_size]
         max_len = max([len(sentence) for sentence in batch])
+        if max_len > longest_seq_len:
+            longest_seq_len = max_len
+
         padded_data.append(pad_sequences(
             batch, maxlen=max_len, dtype="long", value=tokenizer.pad_token,
             truncating="post", padding="post"
         ))
 
-    return padded_data
+    if return_longest_seq_len:
+        return padded_data, longest_seq_len
+    else:
+        return padded_data
 
 
 
-def process_data(path: str, batch_size: int) -> Tuple[DataLoader, DataLoader]:
+def process_data(path: str, batch_size: int, return_misc=True) \
+        -> Union[Tuple[DataLoader, DataLoader],
+                 Tuple[DataLoader, DataLoader, Tokenizer, int]]:
     """
-    Return a torch data loader from the data path given for training the
-    chatbot.
+    Return 2 torch data loaders from the data path given for training the
+    chatbot, one for training and one for validation.
 
     <path> should be a string to a directory within the current file system
     storing all the JSON files containing the conversational data formatted
@@ -95,8 +105,12 @@ def process_data(path: str, batch_size: int) -> Tuple[DataLoader, DataLoader]:
     tokenized_inputs = tokenize_data(inputs, tokenizer)
     tokenized_targets = tokenize_data(targets, tokenizer)
 
-    padded_inputs = pad_data(tokenized_inputs, batch_size, tokenizer)
-    padded_targets = pad_data(tokenized_targets, batch_size, tokenizer)
+    padded_inputs, longest_input_seq = pad_data(
+        tokenized_inputs, batch_size, tokenizer)
+    padded_targets, longest_output_seq = pad_data(
+        tokenized_targets, batch_size, tokenizer)
+
+    longest_seq_len = max(longest_input_seq, longest_output_seq)
 
     inputs = torch.tensor(padded_inputs)
     targets = torch.tensor(padded_targets)
@@ -120,4 +134,7 @@ def process_data(path: str, batch_size: int) -> Tuple[DataLoader, DataLoader]:
     val_sampler = SequentialSampler(val_data)
     val_dataloader = DataLoader(val_data, batch_size, sampler=val_sampler)
 
-    return train_dataloader, val_dataloader
+    if return_misc:
+        return train_dataloader, val_dataloader, tokenizer, longest_seq_len
+    else:
+        return train_dataloader, val_dataloader
